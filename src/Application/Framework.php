@@ -9,15 +9,24 @@ final class Framework {
     /** @var Framework */
     private static $instance = null;
 
+    /** @var string */
+    private static $basePath = null;
+
     /** Returns class instances, if any was created, create one otherwise.
+     * @var $basePath string
      * @return Framework
      */
-    final public static function init() : Framework {
+    final public static function init($basePath) : Framework {
 
-        if(self::$instance == false){
-            self::$instance = new Framework();
-        }
+        if(is_object(self::$instance)) return self::$instance;
 
+        # Set framework base path
+        self::$basePath = dirname($basePath);
+
+        # Create new object
+        self::$instance = new Framework();
+
+        # Return object
         return self::$instance;
     }
 
