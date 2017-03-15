@@ -9,12 +9,14 @@
  * @link $HeadURL$ Subversion
  */
 
-class Api {
+namespace Core\Application;
 
-    /** @var Core\Loader\ConfigurationLoader */
+final class Api {
+
+    /** @var \Core\Loader\ConfigurationLoader */
     private static $config = null;
 
-    /** @var Core\Cache\Volatile\CacheInterface */
+    /** @var \Core\Cache\Volatile\CacheInterface */
     private static $cache = null;
 
     /** @var array */
