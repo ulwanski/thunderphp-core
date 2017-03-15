@@ -1,7 +1,7 @@
 {
     "name": "ulwanski/thunderphp-core",
     "description": "Thunderphp skeleton application",
-    "version": "v0.0.1",
+    "version": "1.0.0",
     "type": "library",
     "keywords": ["thunderphp", "framework", "ulwanski"],
     "homepage": "http://thunderphp.com",
