@@ -1,11 +1,11 @@
 {
     "name": "ulwanski/thunderphp-core",
-    "description": "Thunderphp skeleton application",
+    "description": "Thunderphp core application",
     "version": "1.0.0",
-    "type": "library",
+    "type": "project",
     "keywords": ["thunderphp", "framework", "ulwanski"],
     "homepage": "http://thunderphp.com",
-    "time": "2017-03-28 18:30:00",
+    "time": "2017-03-28 19:30:00",
     "license": "BSD-4-Clause",
     "authors": [
         {
@@ -28,7 +28,10 @@
     },
     "autoload": {
         "psr-4": {
-            "Core\\": "src"
+            "Core\\": "src/"
         }
+    },
+    "autoload-dev": {
+        "psr-4": { "Core\\Tests\\": "tests/" }
     }
 }
