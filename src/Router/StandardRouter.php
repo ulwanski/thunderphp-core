@@ -11,18 +11,12 @@
 
 namespace Core\Router;
 
-use \Core\Cache\Volatile\CacheInterface;
-use \Core\Loader\ConfigurationLoader;
-
 class StandardRouter
 {
-    const ROUTER_SOURCE_CONSOLE = 'run_console';
-    const ROUTER_SOURCE_REMOTE  = 'run_remote';
     const COOKIE_LANGUAGE = 'lang';
     const COOKIE_TEMPLATE = 'theme';
 
     private $requestLang = null;
-    private $cache = null;
     private $config = null;
     private $request = null;
     private $source = null;
@@ -31,26 +25,19 @@ class StandardRouter
     private static $instance = false;
 
     /**
-     * @param ConfigurationLoader $config
-     * @param CacheInterface $cache
      * @return StandardRouter
      */
-    public static function getInstance(ConfigurationLoader $config, CacheInterface $cache)
+    public static function getInstance()
     {
-        if (self::$instance == false)
-            self::$instance = new StandardRouter($config, $cache);
+        if (self::$instance == false) self::$instance = new StandardRouter();
         return self::$instance;
     }
 
-    private function __construct(ConfigurationLoader $config, CacheInterface $cache)
+    private function __construct()
     {
-        header("Server: AmigaOS 1.2, 7,16 MHz", true);
-        header("X-Powered-By: Bananas, Rum and unicorn farts", true);
+        $this->request = new Request();
 
-        $this->config = $config;
-        $this->cache = $cache;
-        $this->source  = $this->get_request_source();
-        $this->request = new Request($this->source);
+        var_dump($this->request);
     }
 
     public function run()
@@ -105,11 +92,8 @@ class StandardRouter
             putenv('USER_THEME='.$templateCookie);
             header('Language: '.$this->requestLang, false);
 
-            if ($source == self::ROUTER_SOURCE_REMOTE) {
-                $result = $this->runRemoteSource($config);
-            } else if ($source == self::ROUTER_SOURCE_CONSOLE) {
-                $result = $this->runConsoleSource($config);
-            }
+            $result = $this->runRemoteSource($config);
+
         } else {
             header("HTTP/1.1 404 I do not have what you're looking for.");
             $msg = 'Path "' . $param . '" does not exist.';
@@ -207,17 +191,21 @@ class StandardRouter
     /** Powoduje przekierowanie na inny adres url
      * @param String $url Adres do przekierowania, jeśli pusty - przekieruje do strony głównej serwisu
      */
-    public function basicRedirect($url = null)
+    public function basicRedirect($url = null): void
     {
         if ($url === null) {
             header('location: ' . $this->getRemoteRootPath());
         } else {
             header('location: ' . $this->getRemoteRootPath() . '/' . trim($url, '/'));
         }
+
         die;
     }
 
-    public function sslRedirect()
+    /**
+     *
+     */
+    public function sslRedirect(): void
     {
         $isSsl = $this->request->isSSLRequest();
 
@@ -226,18 +214,6 @@ class StandardRouter
             $urlString = $_SERVER['REQUEST_SCHEME'] . '://' . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI'];
             header('location: '.$urlString);
             die;
-        }
-    }
-
-    private function get_request_source()
-    {
-        // Drupal way (patch)
-        $is_cli = (!isset($_SERVER['SERVER_SOFTWARE']) && (php_sapi_name() == 'cli' || (is_numeric($_SERVER['argc']) && $_SERVER['argc'] > 0)));
-
-        if ($is_cli) {
-            return self::ROUTER_SOURCE_CONSOLE;
-        } else {
-            return self::ROUTER_SOURCE_REMOTE;
         }
     }
 

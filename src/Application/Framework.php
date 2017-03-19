@@ -2,8 +2,8 @@
 
 namespace Core\Application;
 
+use Core\Exceptions\Handler\ErrorHandler;
 use Core\Loader\ConfigurationLoader;
-use Core\Application\Api;
 
 final class Framework {
 
@@ -13,22 +13,34 @@ final class Framework {
     private static $instance = null;
 
     /** Returns class instances, if any was created, create one otherwise.
-     * @var $basePath string
      * @return Framework
      */
-    final public static function init($basePath) : Framework {
+    final public static function init() : Framework {
+
+        # Set request start time if it not set already by PHP
+        if(!isset($_SERVER['REQUEST_TIME_FLOAT'])){
+            $_SERVER['REQUEST_TIME_FLOAT'] = microtime(true);
+        }
+
+        # Set document root from script filename if ot not set already by PHP
+        if(!isset($_SERVER['DOCUMENT_ROOT']) && isset($_SERVER['SCRIPT_FILENAME'])){
+            $_SERVER['DOCUMENT_ROOT'] = dirname($_SERVER['SCRIPT_FILENAME']);
+        }
 
         # Framework initiation can be performed only once
         if(is_object(self::$instance)) return self::$instance;
 
         # Registering error handlers
-        set_error_handler(array('\Core\Exception\Handler\ErrorHandler', 'catchError'));
-        set_exception_handler(array('\Core\Exception\Handler\ErrorHandler', 'catchException'));
+        set_error_handler([ErrorHandler::class, 'catchError']);
+        set_exception_handler([ErrorHandler::class, 'catchException']);
 
-        # Set framework base path
-        $publicPath  = dirname($basePath);
-        $corePath    = realpath(dirname(__DIR__));
-        $rootPath    = realpath($publicPath.DIRECTORY_SEPARATOR.'..');
+        # Set framework base paths
+        $publicPath = $_SERVER['DOCUMENT_ROOT'];
+        $corePath   = realpath(__DIR__.DIRECTORY_SEPARATOR.'..');
+        $rootPath   = realpath($publicPath.DIRECTORY_SEPARATOR.'..');
+
+        # Activates the circular reference collector
+        gc_enable();
 
         # Create new object
         self::$instance = new Framework($rootPath, $corePath, $publicPath);
@@ -39,35 +51,55 @@ final class Framework {
 
     /**
      * Framework constructor.
-     * @param $rootPath string
-     * @param $corePath string
-     * @param $publicPath string
+     * @param string $rootPath
+     * @param string $corePath
+     * @param string $publicPath
      */
-    private function __construct($rootPath, $corePath, $publicPath)
+    private function __construct(string $rootPath, string $corePath, string $publicPath)
     {
-        Api::init();                                                                                                            # API class initialization
+        # Turn on output buffering
+        ob_start();
 
+        # API class initialization
+        Api::init();
+
+        # Set framework modules path
         $modulesPath = $rootPath.DIRECTORY_SEPARATOR.self::DIRECTORY_MODULES;
 
-        $modulesList = $this->scanModules($modulesPath);
+        /** @var \Core\Cache\Volatile\Apcu $cache */
+        $cache = Api::getCache();
 
-        # Loading configuration
-        $config = ConfigurationLoader::getInstance();                                                                   # Creating a service configuration
-        //$config->loadModulesConfig($loader->getModulesPath(), $loader->getModules());                                   # Loading module configuration
-        //$config->loadCoreConfig($loader->getRootPath());                                                                # Loading main configuration
-//
-//        # Preparing the router
-//        $router = Api::getRouter();                                                                                             # Creating router instances
-//        $router->setRoutingTable($config->getRoutingTable());                                                                   # Preparing the routing table
+        # Try to fetch modules list from cache
+        $modulesList = $cache->entry('_framework_valid_modules_list', function() use ($modulesPath) {
+
+            # Scan for valid modules
+            $modulesList = $this->scanModules($modulesPath);
+
+            return $modulesList;
+        }, 43200 /* 12 hours */ );
+
+        /** @var \Core\Loader\ConfigurationLoader $config */
+        $config = ConfigurationLoader::getInstance();
+
+        # Loading module configuration
+        $config->loadModulesConfig($modulesList);
+
+        # Loading main configuration
+        $config->loadCoreConfig($corePath);
+
+        # Preparing the router
+        $router = Api::getRouter();
+
+        # Preparing the routing table
+        $router->setRoutingTable($config->getRoutingTable());
     }
 
-    /**
+    /** Search for valid modules
      * @param string $modulesPath
      * @return array
      */
     private function scanModules(string $modulesPath) : array
     {
-
         /** @var \RecursiveDirectoryIterator $directoryIterator */
         $directoryIterator = new \RecursiveDirectoryIterator($modulesPath, \FilesystemIterator::SKIP_DOTS);
 
@@ -75,23 +107,27 @@ final class Framework {
         $objectsIterator = new \RecursiveIteratorIterator($directoryIterator, \RecursiveIteratorIterator::CATCH_GET_CHILD);
 
         # Paths required to consider the module valid
-        $requiredDirectories = array(
+        $requiredPaths = array(
             'controller',
             'service',
             'module.php'
         );
 
-        $structure = [];
-
+        # List of valid modules
         $modules = [];
 
         /* @var $item \SplFileInfo */
         foreach ($objectsIterator as $item) {
 
-            # Continue if element is not directory
+
+            # Continue if element is not readable directory
             if (!$item->isDir() || !$item->isReadable()) continue;
 
+            # Main module path is module name
             $moduleName = $item->getBasename();
+
+            # Map module directory and file structure
+            $structure = [];
 
             /* @var $child \SplFileInfo */
             foreach ($objectsIterator->callGetChildren() as $child) {
@@ -100,17 +136,22 @@ final class Framework {
                 if (!$child->isReadable()) continue;
 
                 $dir = $child->getBasename();
-                $structure[$moduleName][$dir] = null;
+                $structure[$moduleName][$dir] = $modulesPath.DIRECTORY_SEPARATOR.$moduleName.DIRECTORY_SEPARATOR.$dir;
             }
+
+            # Continue if module has no files inside
+            if(!isset($structure[$moduleName]) || !is_array($structure[$moduleName])) continue;
 
             # List of required directories found
-            $validDirectories = array_intersect_key(array_flip($requiredDirectories), $structure[$moduleName]);
+            $validPaths = array_intersect_key(array_flip($requiredPaths), $structure[$moduleName]);
 
-            # Create list of valid modules
-            if (count($validDirectories) === count($requiredDirectories)) {
-                $modules[] = $moduleName;
+            # Add module to list if is valid
+            if (count($validPaths) === count($requiredPaths)) {
+                $modules[$moduleName] = $structure[$moduleName];
             }
         }
+
+        return $modules;
     }
 
     /**
@@ -118,8 +159,10 @@ final class Framework {
      */
     public function run() : void
     {
+        /** @var \Core\Router\StandardRouter $router */
+        $router = Api::getRouter();
 
-
+        //$router->run();
     }
 
 }

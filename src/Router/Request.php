@@ -10,101 +10,237 @@
 
 namespace Core\Router;
 
-use \Core\Session\CookieManager;
+use Iterator;
+use ArrayAccess;
 
-class Request {
+class Request implements Iterator, ArrayAccess {
 
     const SCHEME_HTTP = 1;
     const SCHEME_HTTPS = 2;
     const ACCEPT_TEXT = 'text/plain';
     const ACCEPT_HTML = 'text/html';
+    const ACCEPT_XML = 'application/xml';
     const ACCEPT_JSON = 'application/json';
     const ACCEPT_JAVASCRIPT = 'text/javascript';
 
-    private $postData = array();        # Filtered POST data
-    private $postRaw = array();         # Raw POST data
-    private $requestPath = array();     # Request path
-    private $requestParams = array();   # Filtered GET data
-    private $urlCount = 0;              // Liczba parametrów w ścieżce do zasobów (np. "/home/last/10" = 3, parametry GET nie są wliczane)
-    private $urlData = array();
-    private $urlScheme = false;        // Rodzaj protokołu (http lub https)
-    private $request_id = false;        // Jeżeli żądanie posiadało liczbę na końcu ścieżki, jest ona przepisywana do tej zmiennej
-    private $argv = array();            # Command line arguments array
-    private $argc = 0;                  # Command line arguments qty
-    private $cookies = null;
+    /** @var bool|int Id from last path element */
+    protected $requestId = false;
 
-    public function __construct($source = StandardRouter::ROUTER_SOURCE_REMOTE){
+    /** @var int Command line arguments qty */
+    protected $argc = 0;
 
-        /** @var \Core\Session\CookieManager cookies */
-        $this->cookies = new CookieManager($_COOKIE);
+    /** @var array Command line arguments array */
+    protected $argv = [];
 
+    /** @var array Filtered POST data */
+    protected $postData = [];
+
+    /** @var array Raw POST data */
+    protected $postRaw = [];
+
+    /** @var array Filtered GET data */
+    protected $requestParams = [];
+
+    /** @var array Request path */
+    protected $requestPath = [];
+
+    /** @var string|null Request method */
+    protected $requestMethod = null;
+
+    /** @var int Parameters count in path */
+    protected $urlCount = 0;
+
+    /** @var array Parsed url components */
+    protected $urlComponents = [];
+
+    /**
+     * Return the current element
+     * @link http://php.net/manual/en/iterator.current.php
+     * @return mixed Can return any type.
+     * @since 5.0.0
+     */
+    public function current()
+    {
+        return current($this->postData);
+    }
+
+    /**
+     * Move forward to next element
+     * @link http://php.net/manual/en/iterator.next.php
+     * @return void Any returned value is ignored.
+     * @since 5.0.0
+     */
+    public function next()
+    {
+        next($this->postData);
+    }
+
+    /**
+     * Return the key of the current element
+     * @link http://php.net/manual/en/iterator.key.php
+     * @return mixed scalar on success, or null on failure.
+     * @since 5.0.0
+     */
+    public function key()
+    {
+        return key($this->postData);
+    }
+
+    /**
+     * Checks if current position is valid
+     * @link http://php.net/manual/en/iterator.valid.php
+     * @return boolean The return value will be casted to boolean and then evaluated.
+     * Returns true on success or false on failure.
+     * @since 5.0.0
+     */
+    public function valid()
+    {
+        return isset($this->postData[key($this->postData)]);
+    }
+
+    /**
+     * Rewind the Iterator to the first element
+     * @link http://php.net/manual/en/iterator.rewind.php
+     * @return void Any returned value is ignored.
+     * @since 5.0.0
+     */
+    public function rewind()
+    {
+        reset($this->postData);
+    }
+
+    /**
+     * Whether a offset exists
+     * @link http://php.net/manual/en/arrayaccess.offsetexists.php
+     * @param mixed $offset <p>
+     * An offset to check for.
+     * </p>
+     * @return boolean true on success or false on failure.
+     * </p>
+     * <p>
+     * The return value will be casted to boolean if non-boolean was returned.
+     * @since 5.0.0
+     */
+    public function offsetExists($offset)
+    {
+        return isset($this->postData[$offset]);
+    }
+
+    /**
+     * Offset to retrieve
+     * @link http://php.net/manual/en/arrayaccess.offsetget.php
+     * @param mixed $offset <p>
+     * The offset to retrieve.
+     * </p>
+     * @return mixed Can return all value types.
+     * @since 5.0.0
+     */
+    public function offsetGet($offset)
+    {
+        return $this->postData[$offset];
+    }
+
+    /**
+     * Offset to set
+     * @link http://php.net/manual/en/arrayaccess.offsetset.php
+     * @param mixed $offset <p>
+     * The offset to assign the value to.
+     * </p>
+     * @param mixed $value <p>
+     * The value to set.
+     * </p>
+     * @return void
+     * @since 5.0.0
+     */
+    public function offsetSet($offset, $value)
+    {
+        $this->postData[$offset] = $value;
+    }
+
+    /**
+     * Offset to unset
+     * @link http://php.net/manual/en/arrayaccess.offsetunset.php
+     * @param mixed $offset <p>
+     * The offset to unset.
+     * </p>
+     * @return void
+     * @since 5.0.0
+     */
+    public function offsetUnset($offset)
+    {
+        unset($this->postData[$offset]);
+    }
+
+    /**
+     * Request constructor.
+     */
+    public function __construct(){
+
+        # Get request method for API
+        $this->requestMethod = $_SERVER['REQUEST_METHOD'];
+
+        # TODO: Change this for something smarter
         if(isset($_SERVER['REMOTE_ADDR']) && $_SERVER['REMOTE_ADDR'] == '::1') $_SERVER['REMOTE_ADDR'] = '127.0.0.1';
 
-        if (!isset($_SERVER['REQUEST_SCHEME']) && isset($_SERVER['SERVER_PROTOCOL'])){
-            $scheme = explode('/', $_SERVER['SERVER_PROTOCOL']);
-            $_SERVER['REQUEST_SCHEME'] = strtolower($scheme[0]);
-        }
-
-        if($source == StandardRouter::ROUTER_SOURCE_CONSOLE){
+        if($this->isConsoleRequest()){
             if(isset($_SERVER['argc'])) $this->argc = $_SERVER['argc'];
             if(isset($_SERVER['argv'])) $this->argv = $_SERVER['argv'];
             if($this->argc > 1){
-                $this->urlData['path'] = trim($this->argv[1], '/');
-                $this->requestPath = explode('/', $this->urlData['path']);
+                $this->urlComponents['path'] = trim($this->argv[1], '/');
+                $this->requestPath = explode('/', $this->urlComponents['path']);
             }
         } else {
             $urlString = $_SERVER['REQUEST_SCHEME'] . '://' . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI'];          // Tworzymy pełny adres zapytania, razem z parametrami
-            $this->urlData = parse_url(str_replace(trim(dirname($_SERVER['SCRIPT_NAME']), '/'), '', $urlString));             // Parsujemy pełny adres, ale z pominięciem ścieżki zdalnej
-            $this->requestPath = explode('/', trim($this->urlData['path'], '/'));
+            $this->urlComponents = parse_url(str_replace(trim(dirname($_SERVER['SCRIPT_NAME']), '/'), '', $urlString));             // Parsujemy pełny adres, ale z pominięciem ścieżki zdalnej
+            # TODO: Add exception when parse_url return false
+
+            # Add full url to array
+            $this->urlComponents['url'] = $urlString;
+
+            # Explode url path to array
+            $this->requestPath = explode('/', trim($this->urlComponents['path'], '/'));
         }
 
         $this->urlCount = count($this->requestPath);
 
-        if (isset($this->urlData['scheme'])){
-            $this->urlScheme = $this->urlData['scheme'];
+        # Read and clean POST data
+        if(isset($_POST) and !empty($_POST)) foreach($_POST as $name => $value) {
+            $name = $this->cleanParam($name);
+            $this->postData[$name] = $this->cleanData($value);
+            $this->postRaw[$name]  = $value;
         }
 
-        # Read POST data
-        if (isset($_POST) and !empty($_POST)){
-            foreach ($_POST as $name => $value) {
-                $name = $this->clean_param($name);
-                $this->postData[$name] = $this->clean_data($value);
-                $this->postRaw[$name]  = $value;
-            }
-        }
-
-        # Read GET data
-        if (isset($this->urlData['query']) && !empty($this->urlData['query'])){
-            $queryArray = explode('&', $this->urlData['query']);
+        # Read and clean GET data
+        if (isset($this->urlComponents['query']) && !empty($this->urlComponents['query'])){
+            $queryArray = explode('&', $this->urlComponents['query']);
             foreach ($queryArray as $param) {
                 $tmp = explode('=', $param);
-                $name = $this->clean_param($tmp[0]);
+                $name = $this->cleanParam($tmp[0]);
                 if (isset($tmp[1])) {
-                    $this->requestParams[$name] = $this->clean_param($tmp[1]);
+                    $this->requestParams[$name] = $this->cleanParam($tmp[1]);
                 } else {
                     $this->requestParams[$name] = null;
                 }
             }
         }
 
+        # If last url param is a digit, save it as id
         $count = ((int) $this->urlCount) - 1;
-        if (isset($this->requestPath[$count])) {
-            if ($this->is_decimal($this->requestPath[$count]))
-                $this->request_id = (int) $this->requestPath[$count];                                                   // Jeżeli ostatni parametr jest liczbą dziesiętną, przepisujemy je jako 'id'
+        if (isset($this->requestPath[$count]) && $this->isDecimal($this->requestPath[$count])){
+            $this->requestId = intval($this->requestPath[$count]);
         }
 
-        $_REQUEST = array();
         //$_COOKIE = array(); # Nie można tego czyścić bo usuwa się id sesji od razu
+        $_REQUEST = array();
         $_POST = array();
         $_GET = array();
     }
 
-    public function isPost()
-    {
-        return (bool)count($this->postData);
-    }
-
-    public function __get($name) {
+    /**
+     * @param $name
+     * @return mixed
+     */
+    public function __get(string $name) {
         if(isset($this->requestParams[$name])){
             return $this->requestParams[$name];
         }
@@ -114,10 +250,73 @@ class Request {
         return false;
     }
 
-    public function __set($name, $value) {
+    /**
+     * @param $name
+     * @param $value
+     */
+    public function __set(string $name, $value) {
         $this->requestParams->$name = $value;
     }
 
+    /**
+     * @param string $name
+     * @return bool
+     */
+    public function __isset(string $name): bool {
+        return (isset($this->requestParams[$name]) || isset($this->postData[$name]));
+    }
+
+    /**
+     * @param string $name
+     */
+    public function __unset(string $name): void
+    {
+        if(isset($this->requestParams[$name])) unset($this->requestParams[$name]);
+        if(isset($this->postData[$name])) unset($this->postData[$name]);
+    }
+
+    /** The __toString() method allows a class to decide how it will react when it is treated like a string.
+     * @return string
+     */
+    public function __toString(): string
+    {
+        if(!isset($this->urlComponents['url'])) return '';
+        return (string)trim($this->urlComponents['url']);
+    }
+
+    /** This method is called by var_dump() when dumping an object to get the properties that should be shown.
+     * @return array
+     */
+    public function __debugInfo(): array
+    {
+        $classData = [
+            'requestId'     => $this->requestId,
+            'urlCount'      => $this->urlCount,
+            'requestMethod' => $this->requestMethod,
+        ];
+
+        if(!empty($this->urlComponents)) $classData = array_merge($classData, ['urlComponents' => $this->urlComponents]);
+        if(!empty($this->requestPath)) $classData = array_merge($classData, ['requestPath' => $this->requestPath]);
+        if(!empty($this->requestParams)) $classData = array_merge($classData, ['requestParams' => $this->requestParams]);
+        if(!empty($this->postData)) $classData = array_merge($classData, ['postData' => $this->postData]);
+        if(!empty($this->argv)) $classData = array_merge($classData, ['argv' => $this->argv]);
+
+        return $classData;
+    }
+
+    /**
+     * @return bool
+     */
+    public function isPost(): bool
+    {
+        return (bool)($this->requestMethod === "POST");
+    }
+
+    /**
+     * @param null $name
+     * @param null $default
+     * @return array|mixed|null
+     */
     public function getPost($name = null, $default = null) {
         if($name === null){
             return $this->postData;
@@ -128,15 +327,24 @@ class Request {
         return $default;
     }
 
-    public function toArray() {
-        return $this->urlData;
+    /** Funkcja zwraca w żaden sposób <b>nie filtrowane</b> dane przesłane metodą POST.
+     *   Zwrócone dane, należy <i>samodzielnie przefiltrować</i> przed zapisaniem do bazy danych.
+     * @access public
+     * @param  string $name Nazwa przekazanego parametru metodą POST.
+     * @return string Dane POST
+     */
+    public function getRawPost($name = null){
+        if ($name === null) return (array) $this->postRaw;
+        if (isset($this->postRaw[$name])) return $this->postRaw[$name];
+        return false;
     }
 
-    /** Return cookie manager
-     * @return CookieManager
+    /**
+     * @return array
      */
-    public function getCookies(){
-        return $this->cookies;
+    public function postToArray(): array
+    {
+        return $this->postData;
     }
 
     /** Zwraca ID przekazane w adresie lub zwraca wartość domyślną przekazaną w parametrze.
@@ -145,8 +353,8 @@ class Request {
      * @return int Numer id przekazany w rządaniu http (jeśli został przekazany)
      */
     public function getId($default = false) {
-        if ($this->request_id)
-            return (int) $this->request_id;
+        if ($this->requestId)
+            return (int) $this->requestId;
         else
             return $default;
     }
@@ -165,51 +373,43 @@ class Request {
         return $default;
     }
 
-    public function getView(){
-        return $this->getPath(2);
-    }
-
+    /**
+     * @param int $num
+     * @return bool|mixed
+     */
     public function getPath($num = 0){
         return isset($this->requestPath[$num])?$this->requestPath[$num]:false;
     }
 
-    public function getPathString(){
+    /**
+     * @return string
+     */
+    public function getFullPath(): string{
         return implode('/', $this->requestPath);
     }
 
+    /**
+     * @return mixed
+     */
     public function getPathLast(){
         return end($this->requestPath);
     }
 
-    /** Funkcja zwraca w żaden sposób <b>nie filtrowane</b> dane przesłane metodą POST.
-     *   Zwrócone dane, należy <i>samodzielnie przefiltrować</i> przed zapisaniem do bazy danych.
-     * @access public
-     * @param  string $name Nazwa przekazanego parametru metodą POST.
-     * @return string Dane POST
+    /**
+     * @return bool
      */
-    public function getRaw($name = null){
-        if ($name === null) return (array) $this->postRaw;
-        if (isset($this->postRaw[$name])) return $this->postRaw[$name];
-        return false;
-    }
-
-    public function isAjaxRequest() {
+    public function isAjaxRequest(): bool {
         if (!isset($_SERVER['HTTP_X_REQUESTED_WITH']))
             return false;
         $hrw = strtolower($_SERVER['HTTP_X_REQUESTED_WITH']);
         return (bool) (!empty($hrw) && $hrw == 'xmlhttprequest');
     }
 
-    public function isXmlRequest() {
-        $pos = strpos($_SERVER['REQUEST_URI'], '?');
-        if($pos === false) $pos = strlen($_SERVER['REQUEST_URI']);
-        $ext = substr($_SERVER['REQUEST_URI'], $pos - 4, 4);
-        if($ext == ".xml") return true;
-        return false;
-    }
-
-    public function isSSLRequest() {
-        return (bool)($this->urlScheme == 'https')?true:false;
+    /**
+     * @return bool
+     */
+    public function isSSLRequest(): bool {
+        return (bool)($this->urlComponents['scheme'] == 'https')?true:false;
     }
 
     /* Metoda zwraca pierwszy ze znanych sobie formatów danych ze wszystkich wysłanych w żądaniu http
@@ -229,7 +429,11 @@ class Request {
         return false;
     }
 
-    private function clean_param($string) {
+    /**
+     * @param $string
+     * @return int|string
+     */
+    protected function cleanParam($string): string {
         if (is_numeric($string)) return (int) $string;
         $search = array('--', '..', '__', ' ');
         $replace = array('-', '.', '_', '');
@@ -238,11 +442,15 @@ class Request {
         return trim($string);
     }
 
-    private function clean_data($string) {
+    /**
+     * @param $string
+     * @return array|float|int|string
+     */
+    protected function cleanData($string) {
 
         if (is_array($string)) {                                                                                    // Jeżeli dane są tablicą obrabiany kolejno każdy jej element
             foreach ($string as $key => $val)
-                $string[$key] = $this->clean_data($val);
+                $string[$key] = $this->cleanData($val);
             return $string;
         }
 
@@ -260,17 +468,39 @@ class Request {
         }
     }
 
-    private function is_decimal($val) {
+    /**
+     * @param $val
+     * @return bool
+     */
+    private function isDecimal($val): bool
+    {
         return is_numeric($val) && floor($val) == $val;
     }
 
+    /**
+     * @return mixed
+     */
     public function getClientIp(){
         return filter_input(INPUT_SERVER, 'REMOTE_ADDR');
     }
 
-    public function getClientIpLong(){
+    /**
+     * @return int
+     */
+    public function getClientIpLong(): int{
         $ip = filter_input(INPUT_SERVER, 'REMOTE_ADDR');
         return ip2long($ip);
+    }
+
+    /**
+     * @return bool
+     */
+    protected function isConsoleRequest(): bool
+    {
+        $isSvr = (!isset($_SERVER['SERVER_SOFTWARE']));
+        $isCli = ($isSvr && (php_sapi_name() == 'cli' || (is_numeric($_SERVER['argc']) && $_SERVER['argc'] > 0)));
+
+        return $isCli;
     }
 
 }
