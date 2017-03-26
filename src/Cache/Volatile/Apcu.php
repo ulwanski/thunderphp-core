@@ -31,7 +31,7 @@ class Apcu implements CacheInterface {
     }
 
     private function __construct() {
-        if(!extension_loaded('apcu') && !!extension_loaded('apc')){
+        if(!extension_loaded('apcu') && !extension_loaded('apc')){
             throw new MissingModuleException('apcu');
         }
     }

@@ -60,11 +60,6 @@ final class Api {
         return \Core\Cache\Shared\Redis::getInstance(self::$config, self::$cache);
     }
 
-    /** @return \Core\Router\StandardRouter */
-    public static function getRouter(){
-        return \Core\Router\StandardRouter::getInstance(self::$config, self::$cache);
-    }
-
     /** @return \Core\Users\User */
     public static function getUser(){
         return \Core\Users\User::getInstance(self::$config, self::$cache);

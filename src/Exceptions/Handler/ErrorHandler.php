@@ -31,6 +31,10 @@ class ErrorHandler
         $traceBlock = '<div class="php-exception-blocks">';
 
         foreach($e->getTrace() as $key => $trace){
+            if(!isset($trace['file'])) $trace['file'] = '';
+            if(!isset($trace['line'])) $trace['line'] = 0;
+            if(!isset($trace['class'])) $trace['class'] = '';
+            if(!isset($trace['type'])) $trace['type'] = '';
             $listLabel = $trace['class'].$trace['type'].$trace['function'];
             $traceList .= '<li class="php-exception-trace-row" trace-id="'.$key.'">'.$listLabel.'</li>';
             $traceBlock .= '<div class="php-exception-trace-block" id="trace-id-'.$key.'" style="display: none;">';
@@ -126,6 +130,7 @@ class ErrorHandler
 
     protected static function getCodeSample(string $filePath, int $lineNumber, int $contextLines = 6) : string
     {
+        if($filePath == '') return '';
         $startLine = $lineNumber - $contextLines;
         $endLine = $lineNumber + $contextLines;
 

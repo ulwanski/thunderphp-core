@@ -9,7 +9,7 @@
 namespace Core\Exceptions;
 
 
-class NetworkException extends FrameworkException
+class CoreException extends FrameworkException
 {
 
 }

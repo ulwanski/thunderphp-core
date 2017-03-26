@@ -1,7 +1,7 @@
 <?php
 
 /** $Id$
- * abstractController.php
+ * AbstractController.php
  * @version 1.0.0, $Revision$
  * @author Marek Ulwański <marek@ulwanski.pl>
  * @copyright Copyright (c) 2015, Marek Ulwański
@@ -10,38 +10,56 @@
 
 namespace Core\Controller;
     
-use \Api;
-use \Core\Session\SessionGateway;
+use \Core\Application\Api;
+use Core\Router\Request;
 
-abstract class abstractController implements abstractControllerInterface {
+abstract class AbstractController implements ControllerInterface {
 
-    /** @var SessionGateway */
-    private $sessionGateway = null;
+    /** @var string|null */
+    private $actionName = null;
 
-    /** @var array */
-    private $coreConfig = null;
+    /** @var Request|null */
+    private $request = null;
 
-    public function __construct(){
+    /** ControllerInterface constructor.
+     * @param Request $request
+     */
+    public function __construct(Request $request)
+    {
+        $this->request = $request;
 
-        # Fetch core configuration
-        $this->coreConfig = Api::getConfig()->getCoreConfig();
-
-        # Configure user session
-        $this->sessionGateway = new SessionGateway($this->coreConfig['session']['handler']);
     }
 
-    /**
-     * @return SessionGateway
+    /** Default action is called when no other suitable action was found
+     *
      */
-    protected function getSession(){
-        return $this->sessionGateway;
+    abstract function defaultAction(): void;
+
+    /** Set action which <i>run</i> method should call
+     * @param string $actionName
+     */
+    public function setActionName(string $actionName): void
+    {
+        $this->actionName = $actionName;
     }
 
-    /**
-     * @return array
+    /** Call previously setup action
+     * @return ControllerInterface
      */
-    protected function getConfig(){
-        return $this->coreConfig;
+    public function runAction(): ControllerInterface
+    {
+        $action = $this->actionName;
+        if($this->actionName !== null) $this->$action();
+
+        return $this;
+    }
+
+    /** Get Request object
+     * @return Request
+     */
+    function getRequest(): Request
+    {
+        return $this->request;
     }
 
 }

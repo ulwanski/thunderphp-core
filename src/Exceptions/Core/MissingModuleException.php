@@ -12,7 +12,9 @@
 
 namespace Core\Exceptions\Core;
 
-class MissingModuleException extends \Exception {
+use Core\Exceptions\CoreException;
+
+class MissingModuleException extends CoreException {
 
     # Missing module name
     private $moduleName = null;

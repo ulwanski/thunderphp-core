@@ -31,16 +31,16 @@ class ConfigurationLoader {
     private function __construct() {}
 
     /**
-     * @param string $corePath
+     * @param string $rootPath
      */
-    public function loadCoreConfig(string $corePath): void {
+    public function loadCoreConfig(string $rootPath): void {
 
-        $config = Api::getCache()->entry('_framework_core_config', function() use ($corePath){
+        $config = Api::getCache()->entry('_framework_core_config', function() use ($rootPath){
 
-            $globalFile = $corePath.DIRECTORY_SEPARATOR.'config.php';
+            $globalFile = $rootPath.DIRECTORY_SEPARATOR.'config.php';
             $buffer = $this->loadFileConfig($globalFile);
 
-            $localFile = $corePath.DIRECTORY_SEPARATOR.'config.local.php';
+            $localFile = $rootPath.DIRECTORY_SEPARATOR.'config.local.php';
             $buffer = $this->loadFileConfig($localFile, $buffer);
 
             return $buffer;
@@ -135,8 +135,8 @@ class ConfigurationLoader {
     }
 
     public function getDefaultRoute() {
-        if(isset($this->core['router']['default'])){
-            return $this->core['router']['default'];
+        if(isset($this->core['router']['defaultRoute'])){
+            return $this->core['router']['defaultRoute'];
         } else {
             return false;
         }

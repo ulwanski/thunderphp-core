@@ -2,8 +2,10 @@
 
 namespace Core\Application;
 
+use Core\Cache\Volatile\CacheInterface;
 use Core\Exceptions\Handler\ErrorHandler;
 use Core\Loader\ConfigurationLoader;
+use Core\Router\StandardRouter;
 
 final class Framework {
 
@@ -11,6 +13,12 @@ final class Framework {
 
     /** @var Framework|null */
     private static $instance = null;
+
+    /** @var CacheInterface|null */
+    private $cache = null;
+
+    /** @var ConfigurationLoader|null */
+    private $config = null;
 
     /** Returns class instances, if any was created, create one otherwise.
      * @return Framework
@@ -66,11 +74,10 @@ final class Framework {
         # Set framework modules path
         $modulesPath = $rootPath.DIRECTORY_SEPARATOR.self::DIRECTORY_MODULES;
 
-        /** @var \Core\Cache\Volatile\Apcu $cache */
-        $cache = Api::getCache();
+        $this->cache = Api::getCache();
 
         # Try to fetch modules list from cache
-        $modulesList = $cache->entry('_framework_valid_modules_list', function() use ($modulesPath) {
+        $modulesList = $this->cache->entry('_framework_valid_modules_list', function() use ($modulesPath) {
 
             # Scan for valid modules
             $modulesList = $this->scanModules($modulesPath);
@@ -79,19 +86,13 @@ final class Framework {
         }, 43200 /* 12 hours */ );
 
         /** @var \Core\Loader\ConfigurationLoader $config */
-        $config = ConfigurationLoader::getInstance();
+        $this->config = ConfigurationLoader::getInstance();
 
         # Loading module configuration
-        $config->loadModulesConfig($modulesList);
+        $this->config->loadModulesConfig($modulesList);
 
         # Loading main configuration
-        $config->loadCoreConfig($corePath);
-
-        # Preparing the router
-        $router = Api::getRouter();
-
-        # Preparing the routing table
-        $router->setRoutingTable($config->getRoutingTable());
+        $this->config->loadCoreConfig($rootPath);
     }
 
     /** Search for valid modules
@@ -108,8 +109,8 @@ final class Framework {
 
         # Paths required to consider the module valid
         $requiredPaths = array(
-            'controller',
-            'service',
+            'src',
+            'tests',
             'module.php'
         );
 
@@ -160,9 +161,10 @@ final class Framework {
     public function run() : void
     {
         /** @var \Core\Router\StandardRouter $router */
-        $router = Api::getRouter();
+        $router = new StandardRouter($this->config->getRoutingTable(), $this->config->getDefaultRoute(), $this->cache);
 
-        //$router->run();
+        # Start router
+        $router->run();
     }
 
 }

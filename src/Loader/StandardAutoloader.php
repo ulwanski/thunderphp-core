@@ -11,7 +11,7 @@
 
 namespace Core\Loader {
 
-    class StandardAutoloader implements \Serializable {
+    class StandardAutoloader {
 
         const OPT_THROW    = true;
         const OPT_PREPEND  = false;
@@ -35,26 +35,6 @@ namespace Core\Loader {
         
         public function __toString() {
             return (string) $this->path_root;
-        }
-        
-        public function serialize() {
-            return json_encode(array(
-                $this->path_system,
-                $this->structure,
-                $this->modules
-            ));
-        }
-
-        public function unserialize($serialized) {
-            $data = json_decode($serialized);
-            $this->path_system  = $data[0];
-            $this->path_root    = realpath($data[0]."/..");
-            $this->path_core    = realpath($data[0]."/../system");
-            $this->path_modules = realpath($data[0]."/../modules");
-            $this->path_library = realpath($data[0]."/../library");
-            
-            $this->structure = $data[1];
-            $this->modules   = $data[2];
         }
         
         public function spl_autoload($class) {

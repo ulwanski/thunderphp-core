@@ -11,159 +11,158 @@
 
 namespace Core\Router;
 
-class StandardRouter
+use Core\Exceptions\Core\BadRouteException;
+use Core\Exceptions\Network\InfiniteRedirectLoopException;
+
+class StandardRouter extends AbstractRouter
 {
-    const COOKIE_LANGUAGE = 'lang';
-    const COOKIE_TEMPLATE = 'theme';
 
-    private $requestLang = null;
-    private $config = null;
-    private $request = null;
-    private $source = null;
-    private $module = null;
-    private $table = array();
-    private static $instance = false;
+    private function parseRoute($route) {
+        $routeWithoutClosingOptionals = rtrim($route, ']');
+        $numOptionals = strlen($route) - strlen($routeWithoutClosingOptionals);
+        $splitRegex = '~\{ \s* ([a-zA-Z_][a-zA-Z0-9_-]*) \s* (?: : \s* ([^{}]*(?:\{(?-1)\}[^{}]*)*) )? \}';
 
-    /**
-     * @return StandardRouter
-     */
-    public static function getInstance()
-    {
-        if (self::$instance == false) self::$instance = new StandardRouter();
-        return self::$instance;
+        // Split on [ while skipping placeholders
+        $segments = preg_split($splitRegex . '(*SKIP)(*F) | \[~x', $routeWithoutClosingOptionals);
+        if ($numOptionals !== count($segments) - 1) {
+            // If there are any ] in the middle of the route, throw a more specific error message
+            if (preg_match($splitRegex . '(*SKIP)(*F) | \]~x', $routeWithoutClosingOptionals)) {
+                throw new BadRouteException("Optional segments can only occur at the end of a route");
+            }
+            throw new BadRouteException("Number of opening '[' and closing ']' does not match");
+        }
+
+        $currentRoute = '';
+        $routeData = [];
+        foreach ($segments as $n => $segment) {
+            if ($segment === '' && $n !== 0) {
+                throw new BadRouteException("Empty optional part");
+            }
+
+            $currentRoute .= $segment;
+            $routeData[] = [$currentRoute];
+        }
+        return $routeData;
     }
 
-    private function __construct()
-    {
-        $this->request = new Request();
+    private function buildRegexForRoute($routeData, $action, $module) {
+        $regex = '';
+        $variables = [];
+        foreach ($routeData as $part) {
+            if (is_string($part)) {
+                $regex .= preg_quote($part, '~');
+                continue;
+            }
 
-        var_dump($this->request);
+            list($varName, $regexPart) = $part;
+
+            if (isset($variables[$varName])) {
+                throw new BadRouteException(sprintf(
+                    'Cannot use the same placeholder "%s" twice', $varName
+                ));
+            }
+
+            $variables[$varName] = $varName;
+            $regex .= '(' . $regexPart . ')';
+        }
+
+        return [
+            'expression' => $regex,
+            'variables'  => $variables,
+            'action'     => $action,
+            'module'     => $module
+        ];
+    }
+
+    private function getPatternGroup($pattern, $generalGroup = 'general-group'): string
+    {
+        $result = preg_match('~^/[A-Za-z]+~', $pattern, $matches);
+        if($result){
+            $group = $matches[0];
+        } else {
+            $group = $generalGroup;
+        }
+
+        return $group;
     }
 
     public function run()
     {
-        $param = '/'.$this->request->getPath(0);
-        $action = $this->request->getPath(1);
+        # Get from cache or generate route map array
+        $routesMap = $this->cache->entry('_framework_modules_routes', function(){
+            $routesMap = [];
+            foreach($this->routingTable as $routeItem){
 
-        # Redirect to default if empty
-        if (empty($param) || $param == '/') {
-            $default = $this->config->getDefaultRoute();
-            if (!empty($default) && $default != '/') {
-                $this->basicRedirect($default);
-                return $default;
+                $group = $this->getPatternGroup($routeItem['pattern']);
+                $routeData = $this->parseRoute($routeItem['pattern']);
+
+                foreach ((array)$routeItem['method'] as $method){
+                    foreach ($routeData as $data){
+                        $routesMap[$method][$group][] = $this->buildRegexForRoute($data, $routeItem['action'], $routeItem['module']);
+                    }
+                }
+            }
+
+            return $routesMap;
+        }, 43200 /* 12 hours */ );
+
+        # Prepare information of current request
+        $requestUri     = $this->getRequest()->getUrlPath();
+        $requestGroup   = $this->getPatternGroup($requestUri);
+        $requestMethod  = $this->getRequest()->getRequestMethod();
+
+        # Redirect to default route
+        if($requestUri === '/'){
+            $this->redirect($this->defaultRoute);
+        }
+
+        $selectedRoute = false;
+        if(isset($routesMap[$requestMethod][$requestGroup])){
+            foreach ($routesMap[$requestMethod][$requestGroup] as $data){
+                $result = preg_match('~^' . $data['expression'] . '$~', $requestUri, $matches);
+                if($result){
+                    array_shift($matches);
+                    $selectedRoute = [
+                        'module'    => $data['module'],
+                        'handler'   => $data['action'],
+                        'variables' => array_combine($data['variables'], $matches)
+                    ];
+                    break;
+                }
             }
         }
 
-        $requestKey = false;
 
-        # Search for available pattern
-        $requestPattern = '/'.$this->request->getPathString();
-        foreach(array_keys($this->table) as $path){
-            $pattern = "/^".str_replace('/', '\/', $path)."/";
-            $result = preg_match($pattern, $requestPattern, $matches);
+        if($selectedRoute !== false){
 
-            if($result === 1){
-                $requestKey = $path;
-                break;
-            }
-        }
+            $controller = $this->requestHandler($selectedRoute['handler'], $selectedRoute['module']);
 
-        if ($requestKey) {
-            $this->module = $this->table[$requestKey]['module'];
-            $config = $this->parse_config($this->table[$requestKey]);
-            $source = $this->source;
-            $config['action'] = $action;
-
-            $templateCookie = $this->request->getCookies()->getCookie(self::COOKIE_TEMPLATE, 'default');
-
-            # Set cookie with user language
-            $availableLangList = $this->config->getModuleConfig($this->module)->getValue('language')->getArrayCopy();
-            $langCookie = $this->request->getCookies()->getCookie(self::COOKIE_LANGUAGE);
-
-            if($langCookie && in_array($langCookie, $availableLangList)){
-                $this->requestLang = $langCookie;
-            } else {
-                $this->requestLang = $this->findClientLanguage($availableLangList, 'en_US');
-                $this->request->getCookies()->setCookie(self::COOKIE_LANGUAGE, $this->requestLang, time()+2592000);     // Expire in 30 days
-            }
-
-            # Set language environment variable
-            putenv('USER_LANG='.$this->requestLang);
-            putenv('USER_THEME='.$templateCookie);
-            header('Language: '.$this->requestLang, false);
-
-            $result = $this->runRemoteSource($config);
+            # Run controller action
+            $controller->runAction();
 
         } else {
-            header("HTTP/1.1 404 I do not have what you're looking for.");
-            $msg = 'Path "' . $param . '" does not exist.';
-            throw new RouterException($msg, RouterException::ERROR_MISSING_CONTROLLER);
-        }
-        return $param;
-    }
-
-    /**
-     * Function convert url action from some-nice-work to run action: someNiceWorkAction
-     *
-     * @param $action string
-     * @return string
-     */
-    private function makeAction($action)
-    {
-        if(!empty($action)) {
-            if (strpos($action, '-') !== FALSE) {
-                $actionParts = explode('-', $action);
-
-                foreach ($actionParts as &$part) {
-                    $part = ucwords($part);
-                }
-
-                $actionParts[0] = strtolower($actionParts[0]);
-
-                return implode('', $actionParts);
-            }
-
-            return strtolower($action);
-        }
-    }
-
-    private function runRemoteSource($config)
-    {
-        $controller = new $config['class']();
-        $interfaces = class_implements($controller);
-        $action = $this->makeAction($config['action']);
-
-        if (!in_array('Core\Controller\BasicActionController', $interfaces)) {
-            $msg = 'Class ' . $config['class'] . ' must implements BasicActionController interface!';
-            throw new RouterException($msg, RouterException::ERROR_MISSING_INTERFACE);
+            # TODO: Add not found errors handling
+            header("HTTP/1.1 404 This is not the droids you're looking for.");
         }
 
-        $actionName = null;
-        if ($this->request->isAjaxRequest()) {
-            if (method_exists($controller, $action . 'Ajax')) {
-                $actionName = $action . 'Ajax';
-            } else if (method_exists($controller, 'defaultAjax')) {
-                $actionName = 'defaultAjax';
-            }
-        }
-        if ($actionName == null && $this->request->isXmlRequest()) {
-            $xml = substr($action, 0, -4);
-            if (method_exists($controller, $xml . 'Xml')) {
-                $actionName = $xml . 'Xml';
-            } else if (method_exists($controller, 'defaultXml')) {
-                $actionName = 'defaultXml';
-            }
-            if ($actionName !== null) header('Content-type: application/xml; charset="utf-8"');
-        }
-        if ($actionName == null) {
-            if (method_exists($controller, $action . 'Action')) {
-                $actionName = $action . 'Action';
-            } else {
-                $actionName = 'defaultAction';
-            }
-        }
-
-        $controller->$actionName();
+//        $templateCookie = $this->request->getCookies()->getCookie(self::COOKIE_TEMPLATE, 'default');
+//
+//        # Set cookie with user language
+//        $availableLangList = $this->config->getModuleConfig($this->module)->getValue('language')->getArrayCopy();
+//        $langCookie = $this->request->getCookies()->getCookie(self::COOKIE_LANGUAGE);
+//
+//        if($langCookie && in_array($langCookie, $availableLangList)){
+//            $this->requestLang = $langCookie;
+//        } else {
+//            $this->requestLang = $this->findClientLanguage($availableLangList, 'en_US');
+//            $this->request->getCookies()->setCookie(self::COOKIE_LANGUAGE, $this->requestLang, time()+2592000);     // Expire in 30 days
+//        }
+//
+//        # Set language environment variable
+//        putenv('USER_LANG='.$this->requestLang);
+//        putenv('USER_THEME='.$templateCookie);
+//        header('Language: '.$this->requestLang, false);
+//
     }
 
     private function runConsoleSource($config)
@@ -188,17 +187,21 @@ class StandardRouter
         $controller->$actionName();
     }
 
-    /** Powoduje przekierowanie na inny adres url
-     * @param String $url Adres do przekierowania, jeśli pusty - przekieruje do strony głównej serwisu
+    /** Send client redirect to specific url
+     * @param String $url New url for client
+     * @throws InfiniteRedirectLoopException
      */
-    public function basicRedirect($url = null): void
+    public function redirect($url = null): void
     {
-        if ($url === null) {
-            header('location: ' . $this->getRemoteRootPath());
+        if ($url === null || $url === '') {
+            $location = $this->request->getUrlBase();
         } else {
-            header('location: ' . $this->getRemoteRootPath() . '/' . trim($url, '/'));
+            $location = $this->request->getUrlBase().trim($url, '/');
         }
 
+        if($this->request->getUrl() == $location) throw new InfiniteRedirectLoopException($location);
+
+        header('location: ' . $location);
         die;
     }
 
@@ -215,63 +218,6 @@ class StandardRouter
             header('location: '.$urlString);
             die;
         }
-    }
-
-    private function parse_config($conf)
-    {
-        $action = array();
-        $action['class'] = implode('\\', array('', ucfirst($conf['module']), 'Controller', $conf['controller']));
-        return $action;
-    }
-
-    public function setRoutingTable(array $table)
-    {
-        $this->table = $table;
-    }
-
-    /** Zwraca obiekt żądania http
-     * @return \Core\Router\Request
-     */
-    public function getRequest()
-    {
-        return $this->request;
-    }
-
-    /**
-     * Return service domain
-     *
-     * @return mixed
-     */
-    public function getDomain()
-    {
-        return $_SERVER['SERVER_NAME'];
-    }
-
-    /** Metoda zwraca ścieżkę <b>zdalną</b> do katalogu głównego serwera, np. katalog <i>public</i>.
-     *  Jest to najwyższa lokalizacja dostępna zdalnie.
-     *
-     * @return String
-     */
-    public function getRemoteRootPath()
-    {
-        static $path = false;
-        if (!$path) {
-            if (!isset($_SERVER["HTTPS"])) $_SERVER["HTTPS"] = 'off';
-            $scheme = ($_SERVER["HTTPS"] == "on") ? 'https' : 'http';
-            if (isset($_SERVER['PHP_SELF'])) {
-                $path = $_SERVER['PHP_SELF'];
-            } elseif (isset($_SERVER['SCRIPT_NAME'])) {
-                $path = $_SERVER['SCRIPT_NAME'];
-            }
-            if ($this->source == self::ROUTER_SOURCE_REMOTE) {
-                $path = $scheme . '://' . $_SERVER['HTTP_HOST'] . dirname($path);
-                $path = trim($path, '/');
-            } else if ($this->source == self::ROUTER_SOURCE_CONSOLE) {
-                $path = dirname($path);
-                $path = '/' . trim($path, '/');
-            }
-        }
-        return $path;
     }
 
     /** Metoda zwraca ścieżkę <b>lokalną</b> do katalogu głównego serwera, np. <i>public</i>.
@@ -295,58 +241,6 @@ class StandardRouter
     public function getLocalRootPath()
     {
         return realpath(__DIR__ . DIRECTORY_SEPARATOR . '..' . DIRECTORY_SEPARATOR . '..' . DIRECTORY_SEPARATOR);
-    }
-
-    public function getModuleName()
-    {
-        return $this->module;
-    }
-
-    private function findClientLanguage($availableLangList, $defaultLanguage) {
-
-        if (isset($_SERVER['HTTP_ACCEPT_LANGUAGE'])) {
-
-            $headersLanguagePattern = '/([a-z]{1,8}(-[a-z]{1,8})?)\s*(;\s*q\s*=\s*(1|0\.[0-9]+))?/i';
-            $acceptLanguageList = '';
-            preg_match_all($headersLanguagePattern, $_SERVER['HTTP_ACCEPT_LANGUAGE'], $acceptLanguageList);
-
-            if(isset($acceptLanguageList[4]) && isset($acceptLanguageList[1])){
-                foreach($acceptLanguageList[4] as $key => $languageWeight){
-                    if($languageWeight == "") $languageWeight = 1;
-                    $acceptLanguageList[4][$key] = intval(floatval($languageWeight)*100);
-                }
-
-                if(count($acceptLanguageList[1])) {
-                    foreach($acceptLanguageList[1] as $key => $lang){
-                        $acceptLanguageList[1][$key] = str_replace('-', '_', $lang);
-                    }
-                    $acceptLanguageList = array_combine($acceptLanguageList[4], $acceptLanguageList[1]);
-                    krsort($acceptLanguageList);
-
-                    # Choose a matching language
-                    foreach($acceptLanguageList as $languageWeight => $languageCode){
-                        foreach($availableLangList as $availableLanguage){
-                            $shortCode = substr($availableLanguage, 0, 2);
-                            if($languageCode == $availableLanguage || $languageCode == $shortCode){
-                                return $availableLanguage;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if (isset($_SERVER['COUNTRY_CODE'])) {
-            $languageCode = $_SERVER['COUNTRY_CODE'];
-            foreach($availableLangList as $availableLanguage){
-                list($shortCode1, $shortCode2) = explode('_', $availableLanguage);
-                if($languageCode == $availableLanguage || $languageCode == $shortCode1 || $languageCode == $shortCode2){
-                    return $availableLanguage;
-                }
-            }
-        }
-
-        return $defaultLanguage;
     }
 
 }
