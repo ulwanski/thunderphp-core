@@ -47,7 +47,7 @@ abstract class AbstractRouter
         $max_ms = 15;
         $time_ms = (microtime(true) - $_SERVER['REQUEST_TIME_FLOAT']) * 1000;
         $percent = $time_ms * 100 / $max_ms;
-        echo "Execution time: ".round($time_ms, 2),"ms (".round($percent)."%)";
+        //echo "Execution time: ".round($time_ms, 2),"ms (".round($percent)."%)";
     }
 
     abstract public function run();

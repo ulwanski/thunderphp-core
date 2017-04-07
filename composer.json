@@ -33,6 +33,8 @@
         }
     },
     "autoload-dev": {
-        "psr-4": { "Core\\Tests\\": "tests/" }
+        "psr-4": {
+            "Core\\Tests\\": "tests/"
+        }
     }
 }
