@@ -9,7 +9,7 @@
  */
 
 namespace Core\Controller;
-    
+
 use \Core\Application\Api;
 use Core\Router\Request;
 
